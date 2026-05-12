@@ -43,12 +43,12 @@ public class UserController {
     }
 
     @PutMapping("/access")
-    public ResponseEntity<UserAccessResponse> modifyUserAccess(@RequestBody UserAccessRequest userAccessRequest) {
+    public ResponseEntity<UserAccessResponse> modifyUserAccess(@RequestBody @Valid UserAccessRequest userAccessRequest) {
         return userService.modifyUserAccess(userAccessRequest);
     }
 
     @PutMapping("/role")
-    public ResponseEntity<RegUserResponse> modifyUserRole(@RequestBody UserRoleRequest userRoleRequest) {
+    public ResponseEntity<RegUserResponse> modifyUserRole(@RequestBody @Valid UserRoleRequest userRoleRequest) {
         return userService.modifyUserRole(userRoleRequest);
     }
 

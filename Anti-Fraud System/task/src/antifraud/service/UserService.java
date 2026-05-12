@@ -9,6 +9,7 @@ import antifraud.api.exception.UnAuthorized;
 import antifraud.model.Users;
 import antifraud.repository.UserRepository;
 import antifraud.security.AdminSecurity;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.Objects;
 
 
+@Slf4j
 @Service
 public class UserService {
 
@@ -48,7 +50,7 @@ public class UserService {
         }
 
         if (usernameExists) {
-            System.out.println("Name Exists!!!!");
+            log.debug("Username already exists: {}", username);
             throw new InvalidRequest("Invalid Request");
         } else {
             Users savedUser = userRepository.save(new Users(regUserRequest.getName(), regUserRequest.getUsername(), AntiFraudApplication.getEncoder().encode((regUserRequest.getPassword())), adminSecurity.getRole(), adminSecurity.getOperation()));
@@ -89,7 +91,7 @@ public class UserService {
         if (!usernameExists) throw new NotFound("User not found!");
 
         if (!Objects.equals(userAccessRequest.getUsername().toUpperCase(), "Administrator".toUpperCase())) {
-            System.out.println("User exists! and not an administrator");
+            log.debug("Modifying access for user: {}", userAccessRequest.getUsername());
             userRepository.updateOperationByUsernameIgnoreCase(userAccessRequest.getOperation(), userAccessRequest.getUsername());
             String msg = "User " + userAccessRequest.getUsername() + " " + userAccessRequest.getOperation().toLowerCase() + "ed!";
             return new ResponseEntity<>(UserAccessResponse.builder().status(msg).build(), HttpStatus.OK);
