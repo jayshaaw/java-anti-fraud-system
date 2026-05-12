@@ -2,17 +2,19 @@ package antifraud.api.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
-import lombok.Getter;
+import lombok.NoArgsConstructor;
 
+import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotNull;
 
 @Data
 @AllArgsConstructor
+@NoArgsConstructor
 public class UpdateTransactionRequest {
 
     @NotNull
     private Long transactionId;
 
-    @NotNull
+    @NotBlank
     private String feedback;
 }

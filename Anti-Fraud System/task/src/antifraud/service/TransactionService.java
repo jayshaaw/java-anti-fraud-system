@@ -10,48 +10,47 @@ import antifraud.model.FeedbackLimits;
 import antifraud.model.StolenCard;
 import antifraud.model.SuspiciousIP;
 import antifraud.model.Transaction;
+import antifraud.config.FraudDetectionConfig;
 import antifraud.repository.FeedbackLimitsRepository;
 import antifraud.repository.StolenCardRepository;
-import antifraud.repository.SuspiciousTransactionRepository;
+import antifraud.repository.SuspiciousIPRepository;
 import antifraud.repository.TransactionRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.validator.routines.InetAddressValidator;
 import org.apache.commons.validator.routines.checkdigit.LuhnCheckDigit;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 
+@Slf4j
 @Service
 public class TransactionService {
 
-    private final SuspiciousTransactionRepository suspiciousTransactionRepository;
-
+    private final SuspiciousIPRepository suspiciousIPRepository;
     private final TransactionRepository transactionRepository;
-
     private final StolenCardRepository stolenCardRepository;
     private final FeedbackLimitsRepository feedbackLimitsRepository;
+    private final FraudDetectionConfig fraudConfig;
 
-    private final Long DEFAULT_MAX_ALLOWED_VALUE = 200L;
-
-    private final Long DEFAULT_MAX_MANUAL_VALUE = 1500L;
-
-
-    public TransactionService(SuspiciousTransactionRepository suspiciousTransactionRepository, TransactionRepository transactionRepository, StolenCardRepository stolenCardRepository, FeedbackLimitsRepository feedbackLimitsRepository) {
-        this.suspiciousTransactionRepository = suspiciousTransactionRepository;
+    public TransactionService(SuspiciousIPRepository suspiciousIPRepository, TransactionRepository transactionRepository, StolenCardRepository stolenCardRepository, FeedbackLimitsRepository feedbackLimitsRepository, FraudDetectionConfig fraudConfig) {
+        this.suspiciousIPRepository = suspiciousIPRepository;
         this.transactionRepository = transactionRepository;
         this.stolenCardRepository = stolenCardRepository;
         this.feedbackLimitsRepository = feedbackLimitsRepository;
+        this.fraudConfig = fraudConfig;
     }
 
     public ResponseEntity<SuspiciousIPResponse> saveIP(SuspiciousIPRequest suspiciousIPRequest) {
         InetAddressValidator inetAddressValidator = new InetAddressValidator();
-        boolean ipPresent = suspiciousTransactionRepository.existsByIpIgnoreCase(suspiciousIPRequest.getIp());
+        boolean ipPresent = suspiciousIPRepository.existsByIpIgnoreCase(suspiciousIPRequest.getIp());
         if (inetAddressValidator.isValid(suspiciousIPRequest.getIp())) {
             if (ipPresent) throw new InvalidRequest("IP already present");
-            SuspiciousIP suspiciousIP = suspiciousTransactionRepository.save(new SuspiciousIP(suspiciousIPRequest.getIp()));
+            SuspiciousIP suspiciousIP = suspiciousIPRepository.save(new SuspiciousIP(suspiciousIPRequest.getIp()));
             SuspiciousIPResponse suspiciousIPResponse = SuspiciousIPResponse.builder().id(suspiciousIP.getId()).ip(suspiciousIP.getIp()).build();
             return new ResponseEntity<>(suspiciousIPResponse, HttpStatus.OK);
         } else {
@@ -60,12 +59,12 @@ public class TransactionService {
     }
 
     public ResponseEntity<SuspiciousIPDelete> deleteIP(String ip) {
-        System.out.println("Delete: /suspicious-ip/{ip}");
+        log.debug("Delete: /suspicious-ip/{}", ip);
         InetAddressValidator inetAddressValidator = new InetAddressValidator();
-        boolean ipPresent = suspiciousTransactionRepository.existsByIpIgnoreCase(ip);
+        boolean ipPresent = suspiciousIPRepository.existsByIpIgnoreCase(ip);
         if (inetAddressValidator.isValid(ip)) {
             if (!ipPresent) throw new NotFound("IP not found!");
-            suspiciousTransactionRepository.deleteByIpIgnoreCase(ip);
+            suspiciousIPRepository.deleteByIpIgnoreCase(ip);
             SuspiciousIPDelete suspiciousIPDelete = SuspiciousIPDelete.builder().status("IP " + ip + " " + "successfully removed!").build();
             return new ResponseEntity<>(suspiciousIPDelete, HttpStatus.OK);
         } else {
@@ -74,8 +73,8 @@ public class TransactionService {
     }
 
     public List<SuspiciousIPListResponse> listIps() {
-        System.out.println("Get: /suspicious-ip");
-        Iterable<SuspiciousIP> ipsList = suspiciousTransactionRepository.findAll();
+        log.debug("Get: /suspicious-ip");
+        Iterable<SuspiciousIP> ipsList = suspiciousIPRepository.findAll();
         List<SuspiciousIPListResponse> responseIPList = new ArrayList<>();
 
         for (SuspiciousIP ip : ipsList) {
@@ -86,7 +85,7 @@ public class TransactionService {
     }
 
     public ResponseEntity<StolenCardResponse> saveCard(StolenCardRequest stolenCardRequest) {
-        System.out.println("Post: /stolencard");
+        log.debug("Post: /stolencard");
         boolean result = LuhnCheckDigit.LUHN_CHECK_DIGIT.isValid(stolenCardRequest.getNumber());
 
         boolean cardPresent = stolenCardRepository.existsByNumberIgnoreCase(stolenCardRequest.getNumber());
@@ -103,7 +102,7 @@ public class TransactionService {
     }
 
     public ResponseEntity<StolenCardDeleteResponse> deleteCard(String number) {
-        System.out.println("Delete: /stolencard/{number}");
+        log.debug("Delete: /stolencard/{}", number);
         boolean result = LuhnCheckDigit.LUHN_CHECK_DIGIT.isValid(number);
         boolean cardPresent = stolenCardRepository.existsByNumberIgnoreCase(number);
 
@@ -118,7 +117,7 @@ public class TransactionService {
     }
 
     public List<StolenCardListResponse> listCards() {
-        System.out.println("Get: /stolencard");
+        log.debug("Get: /stolencard");
         Iterable<StolenCard> cardList = stolenCardRepository.findAll();
         List<StolenCardListResponse> responseCardList = new ArrayList<>();
 
@@ -130,26 +129,24 @@ public class TransactionService {
     }
 
 
+    @Transactional
     public ResponseEntity<FraudTransactionResponse> postFraudTransaction(TransactionRequest transaction) {
-        System.out.println("Post: /transaction");
+        log.debug("Post: /transaction - {}", transaction);
 
         boolean recordExists = feedbackLimitsRepository.existsByNumberIgnoreCase(transaction.getNumber());
 
         if (!recordExists) {
-            System.out.println("Record does not exists in feedback limits " + "table");
+            log.debug("Record does not exist in feedback limits table for card {}", transaction.getNumber());
             feedbackLimitsRepository.save(new FeedbackLimits(transaction.getNumber(), null, null, null, null, null));
         }
 
-        System.out.println("*** Before Feedback result: " + feedbackLimitsRepository.findByNumberIgnoreCase(transaction.getNumber()));
         InetAddressValidator inetAddressValidator = new InetAddressValidator();
         boolean stolenCardExists = stolenCardRepository.existsByNumberIgnoreCase(transaction.getNumber());
-        System.out.println("Stolen card: " + stolenCardExists);
-        boolean suspiciousIpExists = suspiciousTransactionRepository.existsByIpIgnoreCase(transaction.getIp());
-        System.out.println("Suspicious IP: " + suspiciousIpExists);
+        boolean suspiciousIpExists = suspiciousIPRepository.existsByIpIgnoreCase(transaction.getIp());
         boolean validCard = LuhnCheckDigit.LUHN_CHECK_DIGIT.isValid(transaction.getNumber());
         boolean validIp = inetAddressValidator.isValid(transaction.getIp());
 
-        System.out.println("Transaction posted: " + transaction);
+        log.debug("stolenCard={}, suspiciousIp={}, validCard={}, validIp={}", stolenCardExists, suspiciousIpExists, validCard, validIp);
 
         List<Transaction> validTransactions = listTransactions(transaction.getNumber(), transaction.getDate());
 
@@ -157,7 +154,7 @@ public class TransactionService {
         boolean validIpCorrelation;
 
         int noOfTransaction = validTransactions.size();
-        System.out.println("No of transaction: " + noOfTransaction);
+        log.debug("Transactions in last hour for card {}: {}", transaction.getNumber(), noOfTransaction);
 
         List<String> lastRegionList = new ArrayList<>();
         List<String> lastIpList = new ArrayList<>();
@@ -173,8 +170,7 @@ public class TransactionService {
                 lastIpList.add(validTransaction.getIp());
             }
 
-            System.out.println("Region list: " + Arrays.toString(lastRegionList.toArray()));
-            System.out.println("Ip List: " + Arrays.toString(lastIpList.toArray()));
+            log.debug("Region list: {}, IP list: {}", lastRegionList, lastIpList);
 
             distinctValidRegions = lastRegionList.stream().filter(region -> !Objects.equals(String.valueOf(transaction.getRegion()), region)).distinct().count();
             distinctValidIP = lastIpList.stream().filter(ip -> !Objects.equals(transaction.getIp(), ip)).distinct().count();
@@ -182,8 +178,7 @@ public class TransactionService {
             distinctValidRegionCount = distinctValidRegions;
             distinctValidIpCount = distinctValidIP;
 
-            System.out.println("Count distinct regions: " + distinctValidRegionCount);
-            System.out.println("Count distinct ip: " + distinctValidIpCount);
+            log.debug("Distinct regions: {}, distinct IPs: {}", distinctValidRegionCount, distinctValidIpCount);
 
             validRegionCorrelation = distinctValidRegionCount < 2;
             validIpCorrelation = distinctValidIpCount < 2;
@@ -193,14 +188,11 @@ public class TransactionService {
             validIpCorrelation = true;
         }
 
-        System.out.println("Valid Region: " + validRegionCorrelation + "; " + "Valid IP: " + validIpCorrelation);
+        log.debug("validRegion={}, validIp={}", validRegionCorrelation, validIpCorrelation);
         FraudTransactionResponse finalTransResponse = getTransactionState(transaction, stolenCardExists, suspiciousIpExists, validCard, validIp, validRegionCorrelation, validIpCorrelation, distinctValidRegionCount, distinctValidIpCount);
 
-        System.out.println("Transaction is: " + finalTransResponse.getResult());
+        log.debug("Transaction result: {}", finalTransResponse.getResult());
         FeedbackLimits feedbackForNumber = feedbackLimitsRepository.findByNumberIgnoreCase(transaction.getNumber());
-
-        System.out.println("*** Feedback is: " + feedbackForNumber);
-        Long finalAmount;
 
         Long maxAllowedAmount = feedbackForNumber.getMaxAllowedAmount();
         Long maxManualAmount = feedbackForNumber.getMaxManualAmount();
@@ -210,25 +202,17 @@ public class TransactionService {
         String number = transaction.getNumber();
 
         if (Objects.equals(finalTransResponse.getResult().toString(), "ALLOWED")) {
-            finalAmount = transactionAmount;
-//                    maxAllowedAmount == null ? transactionAmount : maxAllowedAmount;
-
             if (allowedRange == null || transactionAmount > allowedRange) {
                 feedbackLimitsRepository.updateAllowedByNumberIgnoreCase(transactionAmount, number);
             }
         } else if (Objects.equals(finalTransResponse.getResult().toString(), "MANUAL_PROCESSING")) {
-            finalAmount = transactionAmount;
-//                    maxManualAmount == null ? transactionAmount : maxManualAmount;
-
             if (manualRange == null || transactionAmount > manualRange) {
                 feedbackLimitsRepository.updateManualByNumberIgnoreCase(transactionAmount, number);
             }
-        } else {
-            finalAmount = transaction.getAmount();
         }
 
-        Transaction saveTrans = new Transaction(finalAmount, transaction.getIp(), transaction.getNumber(), String.valueOf(transaction.getRegion()), transaction.getDate(), String.valueOf(finalTransResponse.getResult()), "");
-        System.out.println("Saving to Transaction: " + saveTrans);
+        Transaction saveTrans = new Transaction(transactionAmount, transaction.getIp(), transaction.getNumber(), String.valueOf(transaction.getRegion()), transaction.getDate(), String.valueOf(finalTransResponse.getResult()), "");
+        log.debug("Saving transaction: {}", saveTrans);
         transactionRepository.save(saveTrans);
 
         return new ResponseEntity<>(finalTransResponse, HttpStatus.OK);
@@ -238,32 +222,21 @@ public class TransactionService {
     private FraudTransactionResponse getTransactionState(TransactionRequest transaction, boolean stolenCardExists, boolean suspiciousIpExists, boolean validCard, boolean validIp, boolean validRegionCorrelation, boolean validIpCorrelation, long distinctValidRegionCount, long distinctValidIpCount) {
         Long transactionAmount = transaction.getAmount();
 
-        System.out.println("From: postFraudTransaction");
-        System.out.println("Transaction Amount: " + transactionAmount);
-        System.out.println("distinct Valid Region: " + distinctValidRegionCount);
-        System.out.println("distinct Valid Ip: " + distinctValidIpCount);
-        System.out.println("Stolen card exists: " + stolenCardExists);
-        System.out.println("Suspicious IP exists: " + suspiciousIpExists);
-        System.out.println("Valid IP Correlation: " + validIpCorrelation);
-        System.out.println("Valid Region Correlation: " + validRegionCorrelation);
+        log.debug("getTransactionState: amount={}, regions={}, ips={}, stolen={}, suspiciousIp={}, validIpCorrelation={}, validRegionCorrelation={}",
+                transactionAmount, distinctValidRegionCount, distinctValidIpCount, stolenCardExists, suspiciousIpExists, validIpCorrelation, validRegionCorrelation);
 
         String info = stolenCardExists ? suspiciousIpExists ? "card-number, " + "ip" : "card-number" : suspiciousIpExists ? "ip" : "";
 
         String info1 = !validIpCorrelation ? !validRegionCorrelation ? "ip" + "-correlation, " + "region-correlation" : "ip" + "-correlation" : !validRegionCorrelation ? "region" + "-correlation" : "";
 
         String newInfo = Objects.equals(info, "") ? info1 : Objects.equals(info1, "") ? info : info + ", " + info1;
-        System.out.println("Info :" + newInfo);
+        log.debug("Info: {}", newInfo);
 
         if (!validCard || !validIp || Objects.isNull(transactionAmount))
             throw new BadRequest("Invalid card or ip or transaction amount");
 
         boolean state = stolenCardExists || suspiciousIpExists;
-
-        System.out.println("State :" + state);
-
         boolean suspiciousCorrelation = !validRegionCorrelation || !validIpCorrelation;
-
-        System.out.println("SuspiciousCorrelation :" + suspiciousCorrelation);
 
         AntiFraudApplication.TransactionState finalState;
 
@@ -279,18 +252,16 @@ public class TransactionService {
 
 
         FeedbackLimits feedbackLimits = feedbackLimitsRepository.findByNumberIgnoreCase(transaction.getNumber());
-        Long maxAllowedRangeAmount = feedbackLimits.getAllowed() == null ? DEFAULT_MAX_ALLOWED_VALUE : feedbackLimits.getAllowed();
-        System.out.println("Max allowed amount: " + feedbackLimits.getAllowed() + "; trans allowed amount: " + feedbackLimits.getMaxAllowedAmount() + "; result allowed amount: " + maxAllowedRangeAmount);
+        Long maxAllowedRangeAmount = feedbackLimits.getAllowed() == null ? fraudConfig.getMaxAllowedAmount() : feedbackLimits.getAllowed();
 
         if (feedbackLimits.getAllowed() == null) {
-            feedbackLimitsRepository.updateAllowedByNumberIgnoreCase(DEFAULT_MAX_ALLOWED_VALUE, transaction.getNumber());
+            feedbackLimitsRepository.updateAllowedByNumberIgnoreCase(fraudConfig.getMaxAllowedAmount(), transaction.getNumber());
         }
 
-        Long maxManualRangeAmount = feedbackLimits.getManual() == null ? DEFAULT_MAX_MANUAL_VALUE : feedbackLimits.getManual();
-        System.out.println("Max manual amount: " + feedbackLimits.getManual() + "; trans manual amount: " + feedbackLimits.getMaxManualAmount() + "; result manual amount: " + maxManualRangeAmount);
+        Long maxManualRangeAmount = feedbackLimits.getManual() == null ? fraudConfig.getMaxManualAmount() : feedbackLimits.getManual();
 
         if (feedbackLimits.getManual() == null) {
-            feedbackLimitsRepository.updateManualByNumberIgnoreCase(DEFAULT_MAX_MANUAL_VALUE, feedbackLimits.getNumber());
+            feedbackLimitsRepository.updateManualByNumberIgnoreCase(fraudConfig.getMaxManualAmount(), feedbackLimits.getNumber());
         }
 
         String finalInfo = "";
@@ -312,8 +283,7 @@ public class TransactionService {
     }
 
     public List<Transaction> listTransactions(String number, LocalDateTime timeNow) {
-        System.out.println("List transaction in last hour");
-        System.out.println("Number entered is: " + number);
+        log.debug("Listing transactions in last hour for card {}", number);
 
         Iterable<Transaction> transactionList = transactionRepository.findAll();
 
@@ -322,7 +292,7 @@ public class TransactionService {
         transactionList.forEach(transaction -> {
             if (Objects.equals(transaction.getNumber(), number)) {
                 long minDiff = Duration.between(transaction.getDate(), timeNow).toMinutes();
-                if (minDiff >= 0 && minDiff <= 60) {
+                if (minDiff >= 0 && minDiff <= fraudConfig.getCorrelationWindowMinutes()) {
                     testTransResponse.add(transaction);
                 }
             }
@@ -333,7 +303,7 @@ public class TransactionService {
     }
 
     public List<AllTransactionResponse> listAllCardTransactions() {
-        System.out.println("/history");
+        log.debug("GET /history");
         List<Transaction> allCardTransactions;
         List<AllTransactionResponse> allTransactionResponses = new ArrayList<>();
         try {
@@ -345,16 +315,15 @@ public class TransactionService {
 
 
         } catch (Exception e) {
-            System.out.println("Exception: " + e);
-            throw new UnProcessable("Issue fetching records from transaction " + "table");
+            log.error("Exception fetching all transactions", e);
+            throw new UnProcessable("Issue fetching records from transaction table");
         }
         allTransactionResponses.sort(Comparator.comparing(AllTransactionResponse::getTransactionId));
         return allTransactionResponses;
     }
 
     public List<AllTransactionResponse> listCardTransactions(String number) {
-
-        System.out.println("/history/{number}");
+        log.debug("GET /history/{}", number);
         List<Transaction> allCardTransactions;
 
         boolean validCard = LuhnCheckDigit.LUHN_CHECK_DIGIT.isValid(number);
@@ -365,7 +334,7 @@ public class TransactionService {
         allCardTransactions = transactionRepository.findByNumber(number);
 
         if (allCardTransactions.isEmpty()) {
-            throw new NotFound("No " + "transactions associated with the " + "card number");
+            throw new NotFound("No transactions associated with the card number");
         }
 
         try {
@@ -374,45 +343,37 @@ public class TransactionService {
             }
 
         } catch (Exception e) {
-            System.out.println("Exception: " + e);
-            throw new UnProcessable("Exception pulling records from " + "transactions table");
+            log.error("Exception pulling records from transactions table", e);
+            throw new UnProcessable("Exception pulling records from transactions table");
         }
         allTransactionResponses.sort(Comparator.comparing(AllTransactionResponse::getTransactionId));
         return allTransactionResponses;
     }
 
-    double increaseLimit(Long DEFAULT_VALUE, Long currentLimit, Long transactionValue) {
-        System.out.println("Increase Limit");
-        System.out.println("Current before: " + currentLimit + "; transaction" + " Value: " + transactionValue);
-        Long current = currentLimit == null ? DEFAULT_VALUE : currentLimit;
-        System.out.println("Current: " + current);
-        return Math.ceil(0.8 * current + 0.2 * transactionValue);
+    long adjustLimit(long defaultValue, Long currentLimit, Long transactionValue, boolean increase) {
+        long current = currentLimit == null ? defaultValue : currentLimit;
+        double result = increase
+                ? Math.ceil(0.8 * current + 0.2 * transactionValue)
+                : Math.ceil(0.8 * current - 0.2 * transactionValue);
+        log.debug("adjustLimit: current={}, transactionValue={}, increase={}, result={}", current, transactionValue, increase, result);
+        return (long) result;
     }
 
-    double decreaseLimit(Long DEFAULT_VALUE, Long currentLimit, Long transactionValue) {
-        System.out.println("Decrease Limit");
-        System.out.println("Current before: " + currentLimit + "; transaction" + " Value: " + transactionValue);
-        Long current = currentLimit == null ? DEFAULT_VALUE : currentLimit;
-        System.out.println("Current: " + current);
-        return Math.ceil(0.8 * current - 0.2 * transactionValue);
-    }
-
+    @Transactional
     public AllTransactionResponse updateTransaction(UpdateTransactionRequest updateTransactionRequest) {
-        System.out.println("Put: /transaction");
+        log.debug("PUT /transaction - feedback={}", updateTransactionRequest.getFeedback());
         Optional<Transaction> fetchTransaction = transactionRepository.findById(updateTransactionRequest.getTransactionId());
 
         if (fetchTransaction.isEmpty())
-            throw new NotFound("Transaction not " + "found!");
+            throw new NotFound("Transaction not found!");
 
-        List<String> arrayList = new ArrayList<>();
-
+        List<String> validFeedbacks = new ArrayList<>();
         for (AntiFraudApplication.TransactionState val : AntiFraudApplication.TransactionState.values()) {
-            arrayList.add(val.toString());
+            validFeedbacks.add(val.toString());
         }
 
-        if (!arrayList.contains(updateTransactionRequest.getFeedback()))
+        if (!validFeedbacks.contains(updateTransactionRequest.getFeedback()))
             throw new BadRequest("Incorrect feedback");
-
 
         fetchTransaction.ifPresent(transaction -> {
             if (!Objects.equals(transaction.getFeedback(), ""))
@@ -426,10 +387,9 @@ public class TransactionService {
 
         String feedback = updateTransactionRequest.getFeedback();
 
-
         switch (feedback) {
             case "ALLOWED" -> {
-                System.out.println("Feedback :" + feedback);
+                log.debug("Feedback: {}", feedback);
                 fetchTransaction.ifPresent(transaction -> {
                     FeedbackLimits feedbackLimits = feedbackLimitsRepository.findByNumberIgnoreCase(transaction.getNumber());
 
@@ -444,16 +404,13 @@ public class TransactionService {
                     Long newMaxManual = maxManualAmount == null ? transactionAmount : transactionAmount > maxManualAmount ? transactionAmount : maxManualAmount;
 
                     if (Objects.equals(transaction.getResult(), "MANUAL_PROCESSING")) {
-
-                        double allowedRange = increaseLimit(DEFAULT_MAX_ALLOWED_VALUE, allowedAmount, transactionAmount);
-                        feedbackLimitsRepository.updateAllowedAndMaxAllowedAmountByNumberIgnoreCase((long) allowedRange, newMaxAllowed, number);
+                        long allowedRange = adjustLimit(fraudConfig.getMaxAllowedAmount(), allowedAmount, transactionAmount, true);
+                        feedbackLimitsRepository.updateAllowedAndMaxAllowedAmountByNumberIgnoreCase(allowedRange, newMaxAllowed, number);
 
                     } else if (Objects.equals(transaction.getResult(), "PROHIBITED")) {
-
-                        double allowedRange = increaseLimit(DEFAULT_MAX_ALLOWED_VALUE, allowedAmount, transactionAmount);
-                        double manualRange = increaseLimit(DEFAULT_MAX_MANUAL_VALUE, manualAmount, transactionAmount);
-
-                        feedbackLimitsRepository.updateAllowedAndManualAndMaxAllowedAmountAndMaxManualAmountByNumberIgnoreCase((long) allowedRange, (long) manualRange, newMaxAllowed, newMaxManual, number);
+                        long allowedRange = adjustLimit(fraudConfig.getMaxAllowedAmount(), allowedAmount, transactionAmount, true);
+                        long manualRange = adjustLimit(fraudConfig.getMaxManualAmount(), manualAmount, transactionAmount, true);
+                        feedbackLimitsRepository.updateAllowedAndManualAndMaxAllowedAmountAndMaxManualAmountByNumberIgnoreCase(allowedRange, manualRange, newMaxAllowed, newMaxManual, number);
 
                     } else {
                         throw new UnProcessable("Result same as feedback");
@@ -461,7 +418,7 @@ public class TransactionService {
                 });
             }
             case "MANUAL_PROCESSING" -> {
-                System.out.println("Feedback :" + feedback);
+                log.debug("Feedback: {}", feedback);
                 fetchTransaction.ifPresent(transaction -> {
                     FeedbackLimits feedbackLimits = feedbackLimitsRepository.findByNumberIgnoreCase(transaction.getNumber());
 
@@ -476,14 +433,12 @@ public class TransactionService {
                     Long newMaxManual = maxManualAmount == null ? transactionAmount : transactionAmount > maxManualAmount ? transactionAmount : maxManualAmount;
 
                     if (Objects.equals(transaction.getResult(), "ALLOWED")) {
-
-                        double allowedRange = decreaseLimit(DEFAULT_MAX_ALLOWED_VALUE, allowedAmount, transactionAmount);
-                        feedbackLimitsRepository.updateAllowedAndMaxAllowedAmountByNumberIgnoreCase((long) allowedRange, newMaxAllowed, number);
+                        long allowedRange = adjustLimit(fraudConfig.getMaxAllowedAmount(), allowedAmount, transactionAmount, false);
+                        feedbackLimitsRepository.updateAllowedAndMaxAllowedAmountByNumberIgnoreCase(allowedRange, newMaxAllowed, number);
 
                     } else if (Objects.equals(transaction.getResult(), "PROHIBITED")) {
-
-                        double manualRange = increaseLimit(DEFAULT_MAX_MANUAL_VALUE, manualAmount, transactionAmount);
-                        feedbackLimitsRepository.updateManualAndMaxManualAmountByNumberIgnoreCase((long) manualRange, newMaxManual, number);
+                        long manualRange = adjustLimit(fraudConfig.getMaxManualAmount(), manualAmount, transactionAmount, true);
+                        feedbackLimitsRepository.updateManualAndMaxManualAmountByNumberIgnoreCase(manualRange, newMaxManual, number);
 
                     } else {
                         throw new UnProcessable("Result same as feedback");
@@ -491,7 +446,7 @@ public class TransactionService {
                 });
             }
             case "PROHIBITED" -> {
-                System.out.println("Feedback :" + feedback);
+                log.debug("Feedback: {}", feedback);
                 fetchTransaction.ifPresent(transaction -> {
                     FeedbackLimits feedbackLimits = feedbackLimitsRepository.findByNumberIgnoreCase(transaction.getNumber());
 
@@ -506,15 +461,13 @@ public class TransactionService {
                     Long newMaxManual = maxManualAmount == null ? transactionAmount : transactionAmount < maxManualAmount ? transactionAmount : maxManualAmount;
 
                     if (Objects.equals(transaction.getResult(), "ALLOWED")) {
-
-                        double allowedRange = decreaseLimit(DEFAULT_MAX_ALLOWED_VALUE, allowedAmount, transactionAmount);
-                        double manualRange = decreaseLimit(DEFAULT_MAX_MANUAL_VALUE, manualAmount, transactionAmount);
-                        feedbackLimitsRepository.updateAllowedAndManualAndMaxAllowedAmountAndMaxManualAmountByNumberIgnoreCase((long) allowedRange, (long) manualRange, newMaxAllowed, newMaxManual, number);
+                        long allowedRange = adjustLimit(fraudConfig.getMaxAllowedAmount(), allowedAmount, transactionAmount, false);
+                        long manualRange = adjustLimit(fraudConfig.getMaxManualAmount(), manualAmount, transactionAmount, false);
+                        feedbackLimitsRepository.updateAllowedAndManualAndMaxAllowedAmountAndMaxManualAmountByNumberIgnoreCase(allowedRange, manualRange, newMaxAllowed, newMaxManual, number);
 
                     } else if (Objects.equals(transaction.getResult(), "MANUAL_PROCESSING")) {
-
-                        double manualRange = decreaseLimit(DEFAULT_MAX_MANUAL_VALUE, manualAmount, transactionAmount);
-                        feedbackLimitsRepository.updateManualAndMaxManualAmountByNumberIgnoreCase((long) manualRange, maxManualAmount, number);
+                        long manualRange = adjustLimit(fraudConfig.getMaxManualAmount(), manualAmount, transactionAmount, false);
+                        feedbackLimitsRepository.updateManualAndMaxManualAmountByNumberIgnoreCase(manualRange, maxManualAmount, number);
 
                     } else {
                         throw new UnProcessable("Result same as feedback");
@@ -523,15 +476,13 @@ public class TransactionService {
             }
         }
 
-
-        System.out.println("Updating values");
-
+        log.debug("Updating feedback for transaction {}", updateTransactionRequest.getTransactionId());
         transactionRepository.updateFeedbackById(updateTransactionRequest.getFeedback(), updateTransactionRequest.getTransactionId());
 
-        Optional<Transaction> resultTransaction = transactionRepository.findById(updateTransactionRequest.getTransactionId());
+        Transaction resultTransaction = transactionRepository.findById(updateTransactionRequest.getTransactionId())
+                .orElseThrow(() -> new NotFound("Transaction not found after update"));
 
-        return new AllTransactionResponse(resultTransaction.orElseThrow().getId(), resultTransaction.orElseThrow().getAmount(), resultTransaction.orElseThrow().getIp(), resultTransaction.orElseThrow().getNumber(), resultTransaction.orElseThrow().getRegion(), resultTransaction.orElseThrow().getDate(), resultTransaction.orElseThrow().getResult(), resultTransaction.orElseThrow().getFeedback());
-
+        return new AllTransactionResponse(resultTransaction.getId(), resultTransaction.getAmount(), resultTransaction.getIp(), resultTransaction.getNumber(), resultTransaction.getRegion(), resultTransaction.getDate(), resultTransaction.getResult(), resultTransaction.getFeedback());
     }
 
 

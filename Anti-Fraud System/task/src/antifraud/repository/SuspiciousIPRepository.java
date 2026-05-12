@@ -8,7 +8,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
-public interface SuspiciousTransactionRepository extends CrudRepository<SuspiciousIP, Long> {
+public interface SuspiciousIPRepository extends CrudRepository<SuspiciousIP, Long> {
     @Transactional
     @Modifying(clearAutomatically = true)
     @Query("delete from SuspiciousIP s where upper(s.ip) = upper(?1)")

@@ -40,13 +40,13 @@ public class TransactionController {
     }
 
     @PutMapping("/transaction")
-    public ResponseEntity<AllTransactionResponse> updateTransaction(@RequestBody UpdateTransactionRequest updateTransactionRequest) {
+    public ResponseEntity<AllTransactionResponse> updateTransaction(@RequestBody @Valid UpdateTransactionRequest updateTransactionRequest) {
         AllTransactionResponse updatedTransactionResponse = transactionService.updateTransaction(updateTransactionRequest);
         return new ResponseEntity<>(updatedTransactionResponse, HttpStatus.OK);
     }
 
     @PostMapping("/suspicious-ip")
-    public ResponseEntity<SuspiciousIPResponse> saveIP(@RequestBody SuspiciousIPRequest suspiciousIPRequest) {
+    public ResponseEntity<SuspiciousIPResponse> saveIP(@RequestBody @Valid SuspiciousIPRequest suspiciousIPRequest) {
         return transactionService.saveIP(suspiciousIPRequest);
     }
 
@@ -61,7 +61,7 @@ public class TransactionController {
     }
 
     @PostMapping("/stolencard")
-    public ResponseEntity<StolenCardResponse> saveCard(@RequestBody StolenCardRequest stolenCardRequest) {
+    public ResponseEntity<StolenCardResponse> saveCard(@RequestBody @Valid StolenCardRequest stolenCardRequest) {
         return transactionService.saveCard(stolenCardRequest);
     }
 
